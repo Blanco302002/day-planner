@@ -27,3 +27,8 @@ create policy "Public update" on public.events for update to anon using (true) w
 create policy "Public delete" on public.events for delete to anon using (true);
 
 grant select, insert, update, delete on public.events to anon;
+
+-- v2: optional description (safe to run again).
+alter table public.events add column if not exists description text not null default '';
+alter table public.events drop constraint if exists events_description_length;
+alter table public.events add constraint events_description_length check (char_length(description) <= 2000);

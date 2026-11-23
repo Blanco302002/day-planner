@@ -11,11 +11,11 @@
  * API
  *   GET    /api/events?from=YYYY-MM-DD&to=YYYY-MM-DD   (both days inclusive, server local time)
  *   GET    /api/events/:id
- *   POST   /api/events                                 body: { id?, title, start, end }
- *   PUT    /api/events/:id                             body: any of { title, start, end }
+ *   POST   /api/events                                 body: { id?, title, description?, start, end }
+ *   PUT    /api/events/:id                             body: any of { title, description, start, end }
  *   DELETE /api/events/:id
  *
- * Event shape: { id (uuid), title, start (ISO), end (ISO), updatedAt (ISO) }
+ * Event shape: { id (uuid), title, description, start (ISO), end (ISO), updatedAt (ISO) }
  */
 
 const http = require('node:http');
@@ -36,6 +36,7 @@ const DATA_FILE = path.join(DATA_DIR, 'events.json');
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_TITLE_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 2000;
 const MAX_EVENT_SPAN_MS = 31 * 24 * 60 * 60 * 1000; // sanity limit: 31 days
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -46,7 +47,7 @@ const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 // Storage: in-memory Map, mirrored to data/events.json
 // ---------------------------------------------------------------------------
 
-/** @type {Map<string, {id:string,title:string,start:string,end:string,updatedAt:string}>} */
+/** @type {Map<string, {id:string,title:string,description:string,start:string,end:string,updatedAt:string}>} */
 const events = new Map();
 
 /** Load events from disk on startup. A corrupt file is moved aside, never overwritten. */
@@ -86,7 +87,7 @@ function loadEvents() {
 /** Validate an event read from disk; returns a clean copy or null. */
 function normalizeStored(item) {
   if (!item || typeof item !== 'object') return null;
-  const { id, title, start, end, updatedAt } = item;
+  const { id, title, description, start, end, updatedAt } = item;
   if (typeof id !== 'string' || typeof title !== 'string') return null;
   const s = new Date(start);
   const e = new Date(end);
@@ -95,6 +96,7 @@ function normalizeStored(item) {
   return {
     id,
     title,
+    description: typeof description === 'string' ? description : '', // older files have none
     start: s.toISOString(),
     end: e.toISOString(),
     updatedAt: Number.isNaN(u.getTime()) ? new Date().toISOString() : u.toISOString(),
@@ -185,6 +187,17 @@ function buildEvent(body, existing) {
     }
     out.title = title;
   }
+
+  // Optional free text; defaults to '' on create.
+  if (body.description !== undefined || !existing) {
+    const description = body.description === undefined || body.description === null ? '' : body.description;
+    if (typeof description !== 'string') return { error: '"description" must be a string' };
+    if (description.trim().length > MAX_DESCRIPTION_LENGTH) {
+      return { error: `"description" must be at most ${MAX_DESCRIPTION_LENGTH} characters` };
+    }
+    out.description = description.trim();
+  }
+  if (out.description === undefined) out.description = '';
 
   for (const key of ['start', 'end']) {
     if (!existing || body[key] !== undefined) {
@@ -296,7 +309,7 @@ async function createEvent(req, res) {
   const id = typeof body.id === 'string' && UUID_RE.test(body.id) ? body.id.toLowerCase() : crypto.randomUUID();
   if (events.has(id)) throw new HttpError(409, 'An event with this id already exists');
   event.id = id;
-  const saved = { id, title: event.title, start: event.start, end: event.end, updatedAt: event.updatedAt };
+  const saved = { id, title: event.title, description: event.description, start: event.start, end: event.end, updatedAt: event.updatedAt };
 
   await commit(
     () => events.set(id, saved),

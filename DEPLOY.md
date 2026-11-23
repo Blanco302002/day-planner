@@ -102,6 +102,18 @@ git push
 
 GitHub Pages se actualiza solo en 1–2 minutos.
 
+### Si una actualización cambia la base de datos
+
+Algunas versiones agregan columnas nuevas. Por ejemplo, la **descripción** de los eventos
+(sección `-- v2` al final de [`supabase/setup.sql`](supabase/setup.sql)). En ese caso, el orden es:
+
+1. **Primero** abrí Supabase → **SQL Editor → New query**, pegá **todo** `supabase/setup.sql` y
+   tocá **Run**. Se puede correr las veces que quieras: no borra ni duplica nada.
+2. **Después** hacé `git push`.
+
+Si hacés el push antes, la app nueva intenta guardar la descripción en una columna que todavía no
+existe. Cada cambio falla y se deshace solo, con un aviso, hasta que corras el SQL.
+
 ## Cosas a saber
 
 - **Supabase pausa los proyectos Free que pasan una semana sin uso.** Si un día la app muestra

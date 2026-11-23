@@ -37,6 +37,7 @@ if (!Array.isArray(events) || !events.length) {
 const rows = events.map((e) => ({
   id: e.id,
   title: e.title,
+  description: e.description || '',
   start_at: e.start,
   end_at: e.end,
   updated_at: e.updatedAt || new Date().toISOString(),

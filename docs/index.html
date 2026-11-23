@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- viewport-fit=cover lets us paint under the notch / home indicator and pad with safe-area insets -->
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- viewport-fit=cover lets us paint under the notch / home indicator and pad with safe-area insets.
+     maximum-scale/user-scalable: no pinch-zoom (it fights with the planner's gestures). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -47,6 +48,7 @@ html, body {
   overscroll-behavior: none;
   background: var(--bg);
   color: var(--text);
+  touch-action: pan-x pan-y;  /* scrolling yes, pinch-zoom / double-tap zoom no */
 }
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -54,7 +56,6 @@ body {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation; /* no double-tap zoom */
 }
 button { font: inherit; color: inherit; }
 
@@ -105,7 +106,7 @@ button { font: inherit; color: inherit; }
 .btn.primary:hover { background: #DDDDDD; }
 .btn.danger { color: var(--text-dim); }
 .btn.danger:hover { color: var(--text); background: var(--hover); }
-.nav-arrows { display: flex; gap: 4px; }
+#btnNext { margin-left: -4px; }    /* keep the two arrows close together */
 
 .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .view-toggle button {
@@ -119,10 +120,18 @@ button { font: inherit; color: inherit; }
 .view-toggle button:hover { color: var(--text); background: var(--hover); }
 .view-toggle button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
 
-/* Mobile = today only: no navigation, no view toggle. */
-body.is-mobile #btnToday,
-body.is-mobile .nav-arrows,
+/* Mobile = one day at a time: "‹  Sunday, November 22, 2026  ›  [Today]", no view toggle. */
+body.is-mobile .toolbar { flex-wrap: nowrap; padding-left: 10px; padding-right: 10px; }
+body.is-mobile .toolbar-left { flex: 1; gap: 6px; }
+body.is-mobile #btnPrev { order: 0; }
+body.is-mobile .toolbar h1 { order: 1; flex: 1; min-width: 0; margin: 0; text-align: center; font-size: 16px; }
+body.is-mobile #btnNext { order: 2; margin-left: 0; }
+body.is-mobile #btnToday { order: 3; padding: 6px 10px; }
 body.is-mobile .view-toggle { display: none; }
+
+/* Swipe between days (mobile): the day header + column follow the finger. */
+.swipe-follow { will-change: transform; }
+.swipe-animate { transition: transform 0.18s ease-out; }
 
 .offline {
   background: var(--surface);
@@ -223,24 +232,68 @@ body.is-mobile .view-toggle { display: none; }
 /* Events sit in a layer that leaves a strip on the right, so you can always click an empty slot. */
 .events-layer { position: absolute; top: 0; bottom: 0; left: 1px; right: 8px; }
 
+/*
+ * Event block: title → time → description.
+ * The time is never cut off: the title is clamped (2 lines, 1 line on medium
+ * events) and the description only gets whatever height is left.
+ * Size classes are set in JS from the duration:
+ *   .tiny   (15 min)    one compact line: "Title… 18:30–18:45"
+ *   .short  (< 45 min)  one line:         "Title… 18:30–19:00"
+ *   .medium (< 90 min)  title (1 line) / time / description
+ *   default (≥ 90 min)  title (2 lines) / time / description
+ */
 .event {
   position: absolute;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  padding: 3px 6px;
+  padding: 2px 8px;
   border-radius: 6px;
   background: var(--event);
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.3;
+  font-size: 13px;
+  line-height: 1.2;
   cursor: pointer;
   box-shadow: 0 0 0 1px var(--bg);   /* thin gap between neighbours */
 }
 @media (hover: hover) { .event:hover { background: var(--event-hover); } }
-.event.short { padding-top: 0; padding-bottom: 0; }
-.event.short .ev-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ev-text { overflow-wrap: anywhere; }
-.ev-title { font-weight: 600; }
-.ev-time { opacity: 0.85; }
+.ev-title {
+  flex: none;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.ev-time {
+  flex: none;
+  white-space: nowrap;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.ev-desc {                 /* JS (fitDescription) clamps it to the whole lines that fit */
+  flex: none;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  margin-top: 2px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.event.medium .ev-title { -webkit-line-clamp: 1; }
+.event.short, .event.tiny { flex-direction: row; align-items: center; gap: 6px; padding-top: 0; padding-bottom: 0; }
+.event.short .ev-title, .event.tiny .ev-title {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.event.short .ev-desc, .event.tiny .ev-desc { display: none; }
+.event.tiny { font-size: 11px; line-height: 1; }
 
 .ev-resize {                         /* bottom edge = resize handle */
   position: absolute;
@@ -311,9 +364,11 @@ body.is-mobile .backdrop { background: rgba(0, 0, 0, 0.6); }
 .popover {
   position: fixed;
   z-index: 50;
-  width: 300px;
+  width: 380px;
   max-width: calc(100vw - 24px);
-  padding: 14px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
@@ -325,9 +380,12 @@ body.is-mobile .popover {
   top: calc(env(safe-area-inset-top) + 64px);
   width: auto;
   max-width: none;
+  /* leave room for the iOS keyboard; scroll inside if needed */
+  max-height: calc(100vh - env(safe-area-inset-top) - 80px);
 }
 .pop-when { margin-bottom: 10px; font-size: 13px; color: var(--text-dim); }
 .pop-input {
+  display: block;
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -337,9 +395,23 @@ body.is-mobile .popover {
   color: var(--text);
   font: inherit;
   font-size: 16px;            /* >= 16px: iOS won't zoom on focus */
+  line-height: 1.4;
 }
+.pop-input::placeholder { color: #6A6A6A; }
 .pop-input:focus { border-color: #666666; }
 .pop-input.invalid { border-color: var(--text); }
+.pop-title {                  /* grows with the text (JS), up to ~3 lines */
+  resize: none;
+  overflow-y: hidden;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.pop-desc {
+  margin-top: 10px;
+  min-height: 104px;
+  resize: vertical;
+}
 .pop-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .pop-actions .spacer { flex: 1; }
 body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
@@ -392,10 +464,8 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
   <header class="toolbar">
     <div class="toolbar-left">
       <button id="btnToday" class="btn" type="button">Today</button>
-      <div class="nav-arrows">
-        <button id="btnPrev" class="btn icon" type="button" aria-label="Previous">‹</button>
-        <button id="btnNext" class="btn icon" type="button" aria-label="Next">›</button>
-      </div>
+      <button id="btnPrev" class="btn icon" type="button" aria-label="Previous">‹</button>
+      <button id="btnNext" class="btn icon" type="button" aria-label="Next">›</button>
       <h1 id="rangeTitle"></h1>
     </div>
     <div class="view-toggle" id="viewToggle" role="group" aria-label="View">
@@ -419,8 +489,12 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
 <div id="backdrop" class="backdrop" hidden></div>
 <div id="popover" class="popover" role="dialog" aria-modal="true" aria-labelledby="popWhen" hidden>
   <div id="popWhen" class="pop-when"></div>
-  <input id="popInput" class="pop-input" type="text" placeholder="What are you doing?"
-         maxlength="200" autocomplete="off" autocapitalize="sentences" enterkeyhint="done">
+  <!-- Title: required, Enter saves. Description: optional, Enter = new line, Ctrl/Cmd+Enter saves. -->
+  <textarea id="popInput" class="pop-input pop-title" rows="1" placeholder="What are you doing?"
+            maxlength="200" autocomplete="off" autocapitalize="sentences" enterkeyhint="done"
+            aria-label="Title"></textarea>
+  <textarea id="popDesc" class="pop-input pop-desc" rows="4" placeholder="Add a description (optional)"
+            maxlength="2000" autocapitalize="sentences" aria-label="Description"></textarea>
   <div class="pop-actions">
     <button id="popDelete" class="btn danger" type="button">Delete</button>
     <span class="spacer"></span>
@@ -456,8 +530,10 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
   const OFFLINE_RETRY = 5000;       // retry faster while the server is unreachable
   const REQUEST_TIMEOUT = 8000;
   const VIEW_STEP = { day: 1, '3day': 3, week: 7 };
+  const SWIPE_MIN = 60;             // px a horizontal swipe must travel to change day (mobile)
 
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
                   'August', 'September', 'October', 'November', 'December'];
 
@@ -470,7 +546,8 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     title: $('rangeTitle'), viewToggle: $('viewToggle'),
     today: $('btnToday'), prev: $('btnPrev'), next: $('btnNext'),
     offline: $('offline'), toast: $('toast'),
-    backdrop: $('backdrop'), popover: $('popover'), popWhen: $('popWhen'), popInput: $('popInput'),
+    backdrop: $('backdrop'), popover: $('popover'), popWhen: $('popWhen'),
+    popInput: $('popInput'), popDesc: $('popDesc'),
     popSave: $('popSave'), popCancel: $('popCancel'), popDelete: $('popDelete'),
   };
 
@@ -529,11 +606,12 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
   const state = {
     view: VIEW_STEP[loadPref('planner.view', 'week')] ? loadPref('planner.view', 'week') : 'week',
     anchor: todayStart(),   // first visible day (Day / 3 Days) or any day of the week (Week)
+    mobileDay: todayStart(), // the single day shown on the phone (swipe / arrows change it)
     mobile: false,
   };
 
   const store = {
-    events: new Map(),      // id → { id, title, start, end, updatedAt }
+    events: new Map(),      // id → { id, title, description, start, end, updatedAt }
     opSeq: new Map(),       // id → number of the latest local change (to detect superseded requests)
     mutationSeq: 0,         // bumps on every local change (to discard stale sync results)
     inflight: 0,            // API writes still in progress
@@ -541,7 +619,7 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
 
   /** Days currently on screen (array of local-midnight Dates). */
   function visibleDays() {
-    if (state.mobile) return [todayStart()];
+    if (state.mobile) return [state.mobileDay];
     if (state.view === 'day') return [state.anchor];
     if (state.view === '3day') return [0, 1, 2].map((i) => addDays(state.anchor, i));
     const monday = mondayOf(state.anchor);
@@ -566,6 +644,8 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     const todayKey = dateKey(new Date());
 
     els.title.textContent = rangeTitle(days);
+    // On the phone, "Today" only appears when you've moved away from today.
+    els.today.hidden = state.mobile && dateKey(state.mobileDay) === todayKey;
     for (const btn of els.viewToggle.querySelectorAll('button')) {
       btn.setAttribute('aria-pressed', String(btn.dataset.view === state.view));
     }
@@ -584,18 +664,29 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     }));
 
     els.columns.replaceChildren(...days.map((d) => buildColumn(d, todayKey)));
+    els.columns.querySelectorAll('.event').forEach(fitDescription); // needs real sizes → after insert
     updateNowLine();
   }
 
+  /**
+   * Toolbar title.
+   *   one day:     "Sunday, November 22, 2026"
+   *   same month:  "November 16 – 22, 2026"
+   *   two months:  "Nov 30 – Dec 6, 2026"
+   *   two years:   "Dec 29, 2026 – Jan 4, 2027"
+   */
   function rangeTitle(days) {
     const a = days[0];
     const b = days[days.length - 1];
-    const short = (d) => MONTHS[d.getMonth()].slice(0, 3);
-    if (a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()) {
-      return `${MONTHS[a.getMonth()]} ${a.getFullYear()}`;
+    const mon = (d) => MONTHS[d.getMonth()].slice(0, 3);
+    if (days.length === 1) {
+      return `${DAY_NAMES[a.getDay()]}, ${MONTHS[a.getMonth()]} ${a.getDate()}, ${a.getFullYear()}`;
     }
-    if (a.getFullYear() === b.getFullYear()) return `${short(a)} – ${short(b)} ${b.getFullYear()}`;
-    return `${short(a)} ${a.getFullYear()} – ${short(b)} ${b.getFullYear()}`;
+    if (a.getFullYear() !== b.getFullYear()) {
+      return `${mon(a)} ${a.getDate()}, ${a.getFullYear()} – ${mon(b)} ${b.getDate()}, ${b.getFullYear()}`;
+    }
+    if (a.getMonth() !== b.getMonth()) return `${mon(a)} ${a.getDate()} – ${mon(b)} ${b.getDate()}, ${b.getFullYear()}`;
+    return `${MONTHS[a.getMonth()]} ${a.getDate()} – ${b.getDate()}, ${a.getFullYear()}`;
   }
 
   function buildGutter() {
@@ -675,21 +766,18 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     el.style.left = `${it.col * w}%`;
     el.style.width = it.cols > 1 ? `calc(${w}% - 2px)` : '100%';
     placeBlock(el, it.top, it.bottom);
-    el.classList.toggle('short', it.bottom - it.top < 30);
 
-    const text = document.createElement('div');
-    text.className = 'ev-text';
-    const title = document.createElement('span');
-    title.className = 'ev-title';
-    const time = document.createElement('span');
-    time.className = 'ev-time';
-    text.append(title, time);
-
+    // title → time → description (see the .event CSS for how each size shows them)
+    for (const cls of ['ev-title', 'ev-time', 'ev-desc']) {
+      const part = document.createElement('div');
+      part.className = cls;
+      el.appendChild(part);
+    }
     const handle = document.createElement('div');
     handle.className = 'ev-resize';
-    el.append(text, handle);
+    el.appendChild(handle);
 
-    setEventText(el, it.ev.title, it.sMin, it.eMin);
+    setEventText(el, it.ev, it.sMin, it.eMin, it.bottom - it.top);
     return el;
   }
 
@@ -699,10 +787,36 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     el.style.height = `calc(var(--hour-h) * ${(endMin - startMin) / 60} - 1px)`;
   }
 
-  function setEventText(el, title, startMin, endMin) {
-    el.querySelector('.ev-title').textContent = title;
-    el.querySelector('.ev-time').textContent = ` — ${fmtRange(startMin, endMin)}`;
-    el.title = `${title} — ${fmtRange(startMin, endMin)}`;
+  /**
+   * Fill an event block (also used for the drag ghost and the live resize preview).
+   * heightMin: how tall the block is drawn, which picks the size class.
+   */
+  function setEventText(el, ev, startMin, endMin, heightMin = endMin - startMin) {
+    const range = fmtRange(startMin, endMin);
+    const description = ev.description || '';
+    el.querySelector('.ev-title').textContent = ev.title;
+    el.querySelector('.ev-time').textContent = range;
+    el.querySelector('.ev-desc').textContent = description;
+    el.title = `${ev.title} — ${range}${description ? `\n\n${description}` : ''}`;
+
+    el.classList.remove('tiny', 'short', 'medium');
+    if (heightMin < 30) el.classList.add('tiny');
+    else if (heightMin < 45) el.classList.add('short');
+    else if (heightMin < 90) el.classList.add('medium');
+    if (el.isConnected) fitDescription(el);
+  }
+
+  /** Show only as many description lines as fit below the title + time (never half a line). */
+  function fitDescription(el) {
+    const desc = el.querySelector('.ev-desc');
+    desc.style.display = '';
+    desc.style.webkitLineClamp = '';
+    if (!desc.textContent || el.classList.contains('tiny') || el.classList.contains('short')) return;
+    const lineHeight = parseFloat(getComputedStyle(desc).lineHeight);
+    const free = el.clientHeight - desc.offsetTop - 2; // 2px = bottom padding
+    const lines = Math.floor(free / lineHeight);
+    if (lines < 1) desc.style.display = 'none';
+    else desc.style.webkitLineClamp = String(lines);
   }
 
   /** Thin line at the current time, in today's column (if today is on screen). */
@@ -825,8 +939,20 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     const dist = Math.hypot(e.clientX - g.startX, e.clientY - g.startY);
 
     if (!g.active) {
-      // Touch still waiting for the long-press: moving means the user is scrolling.
-      if (dist > TOUCH_SLOP) cancelGesture();
+      // Touch still waiting for the long-press.
+      if (g.swipe) { followSwipe(g.x - g.startX); return; }
+      if (dist > TOUCH_SLOP) {
+        const dx = e.clientX - g.startX;
+        const dy = e.clientY - g.startY;
+        if (state.mobile && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          // Mostly sideways → swipe to another day (instead of scrolling or long-pressing).
+          g.swipe = true;
+          clearTimeout(g.timer);
+          followSwipe(dx);
+        } else {
+          cancelGesture(); // mostly vertical → the browser scrolls natively
+        }
+      }
       return;
     }
     if (!g.dragging) {
@@ -865,8 +991,7 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
       g.newEnd = clamp(snapRound(pointerMinutes(g.col, g.y)), minEnd, DAY_MIN);
       const top = Math.max(g.startMin, 0);
       placeBlock(g.el, top, g.newEnd);
-      g.el.classList.toggle('short', g.newEnd - top < 30);
-      setEventText(g.el, g.ev.title, top, g.newEnd);
+      setEventText(g.el, g.ev, top, g.newEnd);
     }
   }
 
@@ -899,15 +1024,17 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     const layer = col.querySelector('.events-layer');
     if (g.ghost.parentNode !== layer) layer.appendChild(g.ghost);
     placeBlock(g.ghost, startMin, endMin);
-    g.ghost.classList.toggle('short', endMin - startMin < 30);
-    setEventText(g.ghost, g.ev.title, startMin, endMin);
+    setEventText(g.ghost, g.ev, startMin, endMin);
   }
 
   function onPointerUp(e) {
     const g = gesture;
     if (!g || e.pointerId !== g.pointerId) return;
 
-    if (!g.dragging) {
+    if (g.swipe) {
+      endGesture(g, false);
+      finishSwipe(g.x - g.startX);
+    } else if (!g.dragging) {
       // A click (mouse) or a quick tap (touch).
       endGesture(g, false);
       if (!g.afterScroll) {
@@ -938,7 +1065,47 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     const g = gesture;
     if (!g) return;
     endGesture(g, false);
+    if (g.swipe) finishSwipe(0); // snap back
     if (g.dragging || renderPending) requestRender();
+  }
+
+  /* -----------------------------------------------------------------------
+     Swipe between days (mobile). The day header and column follow the
+     finger; past SWIPE_MIN px they slide out and the next/previous day
+     slides in. Swipe left = next day, swipe right = previous day.
+     ----------------------------------------------------------------------- */
+  let swipeBusy = false;
+  const swipeTargets = () => [...els.headers.children, ...els.columns.children];
+
+  function setSwipeOffset(px, animate) {
+    for (const el of swipeTargets()) {
+      el.classList.add('swipe-follow');
+      el.classList.toggle('swipe-animate', animate);
+      el.style.transform = px ? `translateX(${px}px)` : '';
+    }
+  }
+
+  function followSwipe(dx) {
+    if (!swipeBusy) setSwipeOffset(dx, false);
+  }
+
+  function finishSwipe(dx) {
+    if (swipeBusy) return;
+    if (Math.abs(dx) < SWIPE_MIN) { setSwipeOffset(0, true); return; }
+    swipeBusy = true;
+    const dir = dx < 0 ? 1 : -1;               // left → +1 day
+    const width = els.columns.clientWidth;
+    setSwipeOffset(-dir * width, true);        // slide the current day out
+    setTimeout(() => {
+      state.mobileDay = addDays(state.mobileDay, dir);
+      closePopover();
+      render();
+      setSwipeOffset(dir * width, false);      // new day starts off-screen on the other side…
+      void els.columns.offsetWidth;            // (force layout so the next change animates)
+      setSwipeOffset(0, true);                 // …and slides in
+      swipeBusy = false;
+      sync();
+    }, 180);
   }
 
   /** Clean up gesture visuals. keepSelection: leave the selection box for the popover. */
@@ -987,7 +1154,15 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
 
   // Once a long-press is active, stop the browser from scrolling so the finger drags instead.
   els.scroller.addEventListener('touchmove', (e) => {
-    if (gesture && gesture.isTouch && gesture.active) e.preventDefault();
+    if (gesture && gesture.isTouch && (gesture.active || gesture.swipe)) e.preventDefault();
+  }, { passive: false });
+
+  // No pinch-zoom: Safari's own gesture events + any two-finger move elsewhere.
+  for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+  }
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 1 && e.cancelable) e.preventDefault();
   }, { passive: false });
   // Swallow the "ghost" mouse click that iOS fires after a tap on the grid
   // (we already handled the tap via pointer events).
@@ -1009,6 +1184,7 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     Object.assign(popup, { mode: 'create', day, startMin, endMin, selEl, ev: null, el: null });
     els.popWhen.textContent = `${dayLabel(day)} · ${fmtRange(startMin, endMin)}`;
     els.popInput.value = '';
+    els.popDesc.value = '';
     els.popDelete.hidden = true;
     showPopover(selEl.getBoundingClientRect());
   }
@@ -1024,6 +1200,7 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     Object.assign(popup, { mode: 'edit', ev, el, selEl: null });
     el.classList.add('editing');
     els.popInput.value = ev.title;
+    els.popDesc.value = ev.description || '';
     els.popDelete.hidden = false;
     showPopover(el.getBoundingClientRect());
     els.popInput.select();
@@ -1035,9 +1212,25 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     els.popInput.classList.remove('invalid');
     els.backdrop.hidden = false;
     els.popover.hidden = false;
+    els.popover.scrollTop = 0;
+    els.popDesc.style.height = '';   // undo a manual resize from last time
+    autosizeTitle();
     positionPopover(anchorRect);
     // Focus synchronously (inside the tap/click handler) so iOS shows the keyboard.
     els.popInput.focus({ preventScroll: true });
+  }
+
+  /** The title box grows with its text, up to 3 lines (then it scrolls). */
+  function autosizeTitle() {
+    const t = els.popInput;
+    const cs = getComputedStyle(t);
+    const chrome = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) +
+                   parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    const max = parseFloat(cs.lineHeight) * 3 + chrome;
+    t.style.height = 'auto';
+    const wanted = t.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    t.style.height = `${Math.min(wanted, max)}px`;
+    t.style.overflowY = wanted > max ? 'auto' : 'hidden';
   }
 
   /** Desktop: next to the selection/event, kept inside the window. Mobile: CSS pins it to the top. */
@@ -1066,12 +1259,13 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     if (popup.selEl) popup.selEl.remove();
     if (popup.el) popup.el.classList.remove('editing');
     popup.selEl = popup.el = popup.ev = null;
-    els.popInput.blur();
+    if (document.activeElement && els.popover.contains(document.activeElement)) document.activeElement.blur();
     if (renderPending) requestRender();
   }
 
   function savePopover() {
-    const title = els.popInput.value.trim();
+    const title = els.popInput.value.replace(/\s+/g, ' ').trim();
+    const description = els.popDesc.value.trim();
     if (!title) {
       els.popInput.classList.add('invalid');
       els.popInput.focus();
@@ -1080,11 +1274,14 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     if (popup.mode === 'create') {
       const { day, startMin, endMin } = popup;
       closePopover();
-      createEvent(title, atMinutes(day, startMin), atMinutes(day, endMin));
+      createEvent(title, description, atMinutes(day, startMin), atMinutes(day, endMin));
     } else {
       const ev = popup.ev;
       closePopover();
-      if (title !== ev.title) renameEvent(ev, title);
+      const changes = {};
+      if (title !== ev.title) changes.title = title;
+      if (description !== (ev.description || '')) changes.description = description;
+      if (Object.keys(changes).length) editEvent(ev, changes);
     }
   }
 
@@ -1100,9 +1297,18 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
   els.popCancel.addEventListener('click', guarded(closePopover));
   els.popDelete.addEventListener('click', guarded(deleteFromPopover));
   els.backdrop.addEventListener('pointerdown', (e) => { e.preventDefault(); closePopover(); });
-  els.popInput.addEventListener('input', () => els.popInput.classList.remove('invalid'));
+  els.popInput.addEventListener('input', () => {
+    els.popInput.classList.remove('invalid');
+    // The title is one logical line: pasted line breaks become spaces.
+    if (/[\r\n]/.test(els.popInput.value)) els.popInput.value = els.popInput.value.replace(/\s*[\r\n]+\s*/g, ' ');
+    autosizeTitle();
+  });
+  // Title: Enter saves. Description: Enter = new line, Ctrl/Cmd+Enter saves.
   els.popInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); savePopover(); }
+  });
+  els.popDesc.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) { e.preventDefault(); savePopover(); }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
@@ -1177,10 +1383,14 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     const writeHeaders = { ...auth, Prefer: 'return=representation' };
     const enc = encodeURIComponent;
     const iso = (v) => new Date(v).toISOString();
-    const toEvent = (r) => ({ id: r.id, title: r.title, start: iso(r.start_at), end: iso(r.end_at), updatedAt: iso(r.updated_at) });
+    const toEvent = (r) => ({
+      id: r.id, title: r.title, description: r.description || '',
+      start: iso(r.start_at), end: iso(r.end_at), updatedAt: iso(r.updated_at),
+    });
     const toRow = (p) => {
       const row = { updated_at: new Date().toISOString() };
       if (p.title !== undefined) row.title = p.title;
+      if (p.description !== undefined) row.description = p.description;
       if (p.start !== undefined) row.start_at = p.start;
       if (p.end !== undefined) row.end_at = p.end;
       return row;
@@ -1262,14 +1472,18 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
       });
   }
 
-  function createEvent(title, start, end) {
-    const ev = { id: uuid(), title, start: start.toISOString(), end: end.toISOString(), updatedAt: new Date().toISOString() };
+  function createEvent(title, description, start, end) {
+    const ev = {
+      id: uuid(), title, description,
+      start: start.toISOString(), end: end.toISOString(), updatedAt: new Date().toISOString(),
+    };
     mutate(ev.id, ev, () => backend.create(ev), 'save the event');
   }
 
-  function renameEvent(ev, title) {
-    const after = { ...ev, title, updatedAt: new Date().toISOString() };
-    mutate(ev.id, after, () => backend.update(ev.id, { title }), 'rename the event');
+  /** changes: { title?, description? } — only the fields that changed are sent. */
+  function editEvent(ev, changes) {
+    const after = { ...ev, ...changes, updatedAt: new Date().toISOString() };
+    mutate(ev.id, after, () => backend.update(ev.id, changes), 'save the event');
   }
 
   /** Returns false if nothing changed. */
@@ -1389,9 +1603,16 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     sync();
   }
 
-  els.today.addEventListener('click', () => navigate(() => { state.anchor = todayStart(); }));
-  els.prev.addEventListener('click', () => navigate(() => { state.anchor = addDays(state.anchor, -VIEW_STEP[state.view]); }));
-  els.next.addEventListener('click', () => navigate(() => { state.anchor = addDays(state.anchor, VIEW_STEP[state.view]); }));
+  /** Move by one "page": 1 day on the phone, otherwise the size of the current view. */
+  function step(dir) {
+    if (state.mobile) state.mobileDay = addDays(state.mobileDay, dir);
+    else state.anchor = addDays(state.anchor, dir * VIEW_STEP[state.view]);
+  }
+  els.today.addEventListener('click', () => navigate(() => {
+    if (state.mobile) state.mobileDay = todayStart(); else state.anchor = todayStart();
+  }));
+  els.prev.addEventListener('click', () => navigate(() => step(-1)));
+  els.next.addEventListener('click', () => navigate(() => step(1)));
   els.viewToggle.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-view]');
     if (!btn) return;
@@ -1427,6 +1648,7 @@ body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
     const key = dateKey(new Date());
     if (key !== lastTodayKey) {
       if (dateKey(state.anchor) === lastTodayKey) state.anchor = todayStart();
+      if (dateKey(state.mobileDay) === lastTodayKey) state.mobileDay = todayStart();
       lastTodayKey = key;
       requestRender();
       sync();
