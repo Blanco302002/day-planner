@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover lets us paint under the notch / home indicator and pad with safe-area insets -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Planner">
+<title>Day Planner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23000000'/%3E%3Crect x='12' y='16' width='40' height='12' rx='4' fill='%232A52BE'/%3E%3Crect x='12' y='34' width='26' height='14' rx='4' fill='%232A52BE' opacity='.7'/%3E%3C/svg%3E">
+<style>
+/* =========================================================================
+   Theme
+   ========================================================================= */
+:root {
+  /* Black & white UI — blue is used ONLY for event blocks. */
+  --bg: #000000;          /* page + grid background */
+  --surface: #111111;     /* popover, banner, toast */
+  --hover: #1A1A1A;       /* button hover */
+  --grid: #1F1F1F;        /* hour lines, column dividers */
+  --grid-soft: #121212;   /* 15-minute lines */
+  --border: #333333;      /* buttons, inputs, popover */
+  --event: #2A52BE;       /* event blocks */
+  --event-hover: #3260CC;
+  --selection: rgba(42, 82, 190, 0.4);
+  --text: #FFFFFF;
+  --text-dim: #8A8A8A;    /* hour labels, weekday names */
+  --now: #FFFFFF;         /* current-time line */
+
+  --hour-h: 48px;         /* height of one hour in the grid */
+  --gutter-w: 56px;       /* width of the time-label column */
+  color-scheme: dark;
+}
+body.is-mobile { --hour-h: 56px; --gutter-w: 50px; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;           /* only the grid scrolls */
+  overscroll-behavior: none;
+  background: var(--bg);
+  color: var(--text);
+}
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* no double-tap zoom */
+}
+button { font: inherit; color: inherit; }
+
+#app {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* =========================================================================
+   Toolbar
+   ========================================================================= */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.toolbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.toolbar h1 {
+  margin: 0 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.btn {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 14px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.btn:hover { background: var(--hover); }
+.btn:focus-visible, .view-toggle button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.btn.icon { width: 34px; padding: 4px 0; font-size: 18px; }
+.btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+.btn.primary:hover { background: #DDDDDD; }
+.btn.danger { color: var(--text-dim); }
+.btn.danger:hover { color: var(--text); background: var(--hover); }
+.nav-arrows { display: flex; gap: 4px; }
+
+.view-toggle { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.view-toggle button {
+  background: var(--bg);
+  border: 0;
+  padding: 6px 14px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.view-toggle button + button { border-left: 1px solid var(--border); }
+.view-toggle button:hover { color: var(--text); background: var(--hover); }
+.view-toggle button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+
+/* Mobile = today only: no navigation, no view toggle. */
+body.is-mobile #btnToday,
+body.is-mobile .nav-arrows,
+body.is-mobile .view-toggle { display: none; }
+
+.offline {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: center;
+  font-size: 13px;
+  padding: 6px 12px;
+}
+
+/* =========================================================================
+   Time grid
+   ========================================================================= */
+.scroller {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;            /* vertical swipe = native scroll */
+}
+
+/* Day headers live inside the scroller (sticky) so they line up with the columns exactly. */
+.day-headers {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  padding-left: var(--gutter-w);
+  background: var(--bg);
+  border-bottom: 1px solid var(--grid);
+}
+.day-header {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 2px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.day-header .dow { color: var(--text-dim); font-size: 13px; }
+.day-header .dnum {
+  display: inline-block;
+  min-width: 28px;
+  padding: 3px 6px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.day-header.today .dow { color: var(--text); }
+.day-header.today .dnum { background: var(--text); color: var(--bg); }
+
+.grid {
+  position: relative;
+  display: flex;
+  padding: 10px 0 calc(24px + env(safe-area-inset-bottom));
+  /* no text selection / iOS callout while long-pressing */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.gutter {
+  position: relative;
+  flex: 0 0 var(--gutter-w);
+  height: calc(var(--hour-h) * 24);
+}
+.hour-label {
+  position: absolute;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.columns {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  height: calc(var(--hour-h) * 24);
+  border-bottom: 1px solid var(--grid);
+  /* hour lines + fainter 15-minute lines, on pure black */
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(var(--grid-soft) 1px, transparent 1px);
+  background-size: 100% var(--hour-h), 100% calc(var(--hour-h) / 4);
+}
+.day-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  border-left: 1px solid var(--grid);
+}
+
+/* Events sit in a layer that leaves a strip on the right, so you can always click an empty slot. */
+.events-layer { position: absolute; top: 0; bottom: 0; left: 1px; right: 8px; }
+
+.event {
+  position: absolute;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--event);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px var(--bg);   /* thin gap between neighbours */
+}
+@media (hover: hover) { .event:hover { background: var(--event-hover); } }
+.event.short { padding-top: 0; padding-bottom: 0; }
+.event.short .ev-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-text { overflow-wrap: anywhere; }
+.ev-title { font-weight: 600; }
+.ev-time { opacity: 0.85; }
+
+.ev-resize {                         /* bottom edge = resize handle */
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+.ev-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: 3px;
+  width: 18px; height: 2px;
+  margin-left: -9px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.6);
+  opacity: 0;
+}
+.event:hover .ev-resize::after { opacity: 1; }
+body.is-mobile .ev-resize { height: 14px; }
+body.is-mobile .ev-resize::after { opacity: 0.5; }
+
+.event.editing  { z-index: 3; box-shadow: 0 0 0 2px var(--text); }
+.event.drag-source { opacity: 0.35; }
+.event.ghost    { z-index: 6; pointer-events: none; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.35); }
+.event.resizing { z-index: 6; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6); }
+
+.selection {                          /* the box you draw to create an event */
+  position: absolute;
+  left: 1px; right: 8px;
+  z-index: 4;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid var(--text);
+  border-radius: 6px;
+  background: var(--selection);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.now-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  margin-top: -1px;
+  z-index: 5;
+  background: var(--now);
+  pointer-events: none;
+}
+.now-line::before {
+  content: "";
+  position: absolute;
+  left: -5px; top: -4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--now);
+}
+
+body.drag-move, body.drag-move * { cursor: grabbing !important; }
+body.drag-resize, body.drag-resize * { cursor: ns-resize !important; }
+
+/* =========================================================================
+   Popover, toast, rotate message
+   ========================================================================= */
+.backdrop { position: fixed; inset: 0; z-index: 40; }
+body.is-mobile .backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.popover {
+  position: fixed;
+  z-index: 50;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+/* On the phone: full width near the top, so the keyboard never covers it. */
+body.is-mobile .popover {
+  left: 12px; right: 12px;
+  top: calc(env(safe-area-inset-top) + 64px);
+  width: auto;
+  max-width: none;
+}
+.pop-when { margin-bottom: 10px; font-size: 13px; color: var(--text-dim); }
+.pop-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;            /* >= 16px: iOS won't zoom on focus */
+}
+.pop-input:focus { border-color: #666666; }
+.pop-input.invalid { border-color: var(--text); }
+.pop-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.pop-actions .spacer { flex: 1; }
+body.is-mobile .pop-actions .btn { padding: 9px 16px; font-size: 15px; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  z-index: 60;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 16px);
+  transition: opacity 0.2s, transform 0.2s;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.error { border-color: #666666; }
+
+.rotate {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: var(--bg);
+  font-size: 18px;
+  text-align: center;
+}
+.rotate-icon { font-size: 44px; }
+/* A phone held sideways. */
+@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  .rotate { display: flex; }
+  #app, .popover, .backdrop, .toast { display: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header class="toolbar">
+    <div class="toolbar-left">
+      <button id="btnToday" class="btn" type="button">Today</button>
+      <div class="nav-arrows">
+        <button id="btnPrev" class="btn icon" type="button" aria-label="Previous">‹</button>
+        <button id="btnNext" class="btn icon" type="button" aria-label="Next">›</button>
+      </div>
+      <h1 id="rangeTitle"></h1>
+    </div>
+    <div class="view-toggle" id="viewToggle" role="group" aria-label="View">
+      <button type="button" data-view="day">Day</button>
+      <button type="button" data-view="3day">3 Days</button>
+      <button type="button" data-view="week">Week</button>
+    </div>
+  </header>
+
+  <div id="offline" class="offline" role="status" hidden>Offline — can't reach server</div>
+
+  <main id="scroller" class="scroller">
+    <div id="dayHeaders" class="day-headers"></div>
+    <div class="grid">
+      <div id="gutter" class="gutter"></div>
+      <div id="columns" class="columns"></div>
+    </div>
+  </main>
+</div>
+
+<div id="backdrop" class="backdrop" hidden></div>
+<div id="popover" class="popover" role="dialog" aria-modal="true" aria-labelledby="popWhen" hidden>
+  <div id="popWhen" class="pop-when"></div>
+  <input id="popInput" class="pop-input" type="text" placeholder="What are you doing?"
+         maxlength="200" autocomplete="off" autocapitalize="sentences" enterkeyhint="done">
+  <div class="pop-actions">
+    <button id="popDelete" class="btn danger" type="button">Delete</button>
+    <span class="spacer"></span>
+    <button id="popCancel" class="btn" type="button">Cancel</button>
+    <button id="popSave" class="btn primary" type="button">Save</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div class="rotate">
+  <div class="rotate-icon">⟳</div>
+  <div>Please rotate your phone</div>
+</div>
+
+<!-- Storage settings (local server vs Supabase). -->
+<script src="config.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  /* =======================================================================
+     Constants
+     ======================================================================= */
+  const SNAP = 15;                  // minutes: grid snap for create / move / resize
+  const DAY_MIN = 24 * 60;
+  const DEFAULT_DURATION = 60;      // a plain click / tap creates 1 hour
+  const LONG_PRESS_MS = 400;        // touch: hold this long to start dragging
+  const TOUCH_SLOP = 10;            // px a finger may wander while waiting for the long-press
+  const MOUSE_DRAG_THRESHOLD = 4;   // px before a mouse press becomes a drag
+  const AUTOSCROLL_EDGE = 48;       // px from the top/bottom edge where dragging auto-scrolls
+  const SYNC_INTERVAL = 30000;      // re-fetch from server every 30 s
+  const OFFLINE_RETRY = 5000;       // retry faster while the server is unreachable
+  const REQUEST_TIMEOUT = 8000;
+  const VIEW_STEP = { day: 1, '3day': 3, week: 7 };
+
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                  'August', 'September', 'October', 'November', 'December'];
+
+  /* =======================================================================
+     DOM references
+     ======================================================================= */
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    scroller: $('scroller'), headers: $('dayHeaders'), gutter: $('gutter'), columns: $('columns'),
+    title: $('rangeTitle'), viewToggle: $('viewToggle'),
+    today: $('btnToday'), prev: $('btnPrev'), next: $('btnNext'),
+    offline: $('offline'), toast: $('toast'),
+    backdrop: $('backdrop'), popover: $('popover'), popWhen: $('popWhen'), popInput: $('popInput'),
+    popSave: $('popSave'), popCancel: $('popCancel'), popDelete: $('popDelete'),
+  };
+
+  /* =======================================================================
+     Small helpers (dates are always local time)
+     ======================================================================= */
+  const pad = (n) => String(n).padStart(2, '0');
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const snapFloor = (m) => Math.floor(m / SNAP) * SNAP;
+  const snapRound = (m) => Math.round(m / SNAP) * SNAP;
+
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  const dateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const sameDay = (a, b) => dateKey(a) === dateKey(b);
+  const todayStart = () => startOfDay(new Date());
+  const mondayOf = (d) => addDays(startOfDay(d), -((d.getDay() + 6) % 7));
+  /** A day + minutes-from-midnight → Date (1440 = next midnight). */
+  const atMinutes = (day, min) => new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, min);
+  function dateFromKey(key) {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  /** Wall-clock minutes of `date` within `day`, clipped to [0, 1440]. */
+  function minutesInDay(date, day) {
+    if (date <= day) return 0;
+    if (date >= addDays(day, 1)) return DAY_MIN;
+    return date.getHours() * 60 + date.getMinutes();
+  }
+  const fmtMin = (min) => `${pad(Math.floor(min / 60))}:${pad(Math.round(min % 60))}`; // 1440 → "24:00"
+  const fmtRange = (a, b) => `${fmtMin(a)}–${fmtMin(b)}`;
+  const dayLabel = (d) => `${DOW[d.getDay()]} ${d.getDate()}`;
+
+  /** RFC 4122 v4 uuid. crypto.randomUUID() needs HTTPS, so fall back to getRandomValues on plain http. */
+  function uuid() {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+
+  function loadPref(key, fallback) {
+    try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; }
+  }
+  function savePref(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) { /* private mode etc. */ }
+  }
+
+  /* =======================================================================
+     State
+     ======================================================================= */
+  const mobileQuery = window.matchMedia('(max-width: 700px)');
+
+  const state = {
+    view: VIEW_STEP[loadPref('planner.view', 'week')] ? loadPref('planner.view', 'week') : 'week',
+    anchor: todayStart(),   // first visible day (Day / 3 Days) or any day of the week (Week)
+    mobile: false,
+  };
+
+  const store = {
+    events: new Map(),      // id → { id, title, start, end, updatedAt }
+    opSeq: new Map(),       // id → number of the latest local change (to detect superseded requests)
+    mutationSeq: 0,         // bumps on every local change (to discard stale sync results)
+    inflight: 0,            // API writes still in progress
+  };
+
+  /** Days currently on screen (array of local-midnight Dates). */
+  function visibleDays() {
+    if (state.mobile) return [todayStart()];
+    if (state.view === 'day') return [state.anchor];
+    if (state.view === '3day') return [0, 1, 2].map((i) => addDays(state.anchor, i));
+    const monday = mondayOf(state.anchor);
+    return [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(monday, i));
+  }
+
+  /* =======================================================================
+     Rendering
+     ======================================================================= */
+  let gesture = null;          // the pointer interaction in progress (see "Pointer interaction")
+  let renderPending = false;
+
+  /** Re-render now, or as soon as the user finishes dragging / closes the popover. */
+  function requestRender() {
+    if (gesture || popup.open) { renderPending = true; return; }
+    render();
+  }
+
+  function render() {
+    renderPending = false;
+    const days = visibleDays();
+    const todayKey = dateKey(new Date());
+
+    els.title.textContent = rangeTitle(days);
+    for (const btn of els.viewToggle.querySelectorAll('button')) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.view === state.view));
+    }
+
+    els.headers.replaceChildren(...days.map((d) => {
+      const h = document.createElement('div');
+      h.className = 'day-header' + (dateKey(d) === todayKey ? ' today' : '');
+      const dow = document.createElement('span');
+      dow.className = 'dow';
+      dow.textContent = DOW[d.getDay()];
+      const num = document.createElement('span');
+      num.className = 'dnum';
+      num.textContent = d.getDate();
+      h.append(dow, ' ', num);
+      return h;
+    }));
+
+    els.columns.replaceChildren(...days.map((d) => buildColumn(d, todayKey)));
+    updateNowLine();
+  }
+
+  function rangeTitle(days) {
+    const a = days[0];
+    const b = days[days.length - 1];
+    const short = (d) => MONTHS[d.getMonth()].slice(0, 3);
+    if (a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()) {
+      return `${MONTHS[a.getMonth()]} ${a.getFullYear()}`;
+    }
+    if (a.getFullYear() === b.getFullYear()) return `${short(a)} – ${short(b)} ${b.getFullYear()}`;
+    return `${short(a)} ${a.getFullYear()} – ${short(b)} ${b.getFullYear()}`;
+  }
+
+  function buildGutter() {
+    for (let h = 0; h < 24; h++) {
+      const label = document.createElement('div');
+      label.className = 'hour-label';
+      label.style.top = `calc(var(--hour-h) * ${h})`;
+      label.textContent = `${pad(h)}:00`;
+      els.gutter.appendChild(label);
+    }
+  }
+
+  function buildColumn(day, todayKey) {
+    const col = document.createElement('div');
+    col.className = 'day-col';
+    col.dataset.date = dateKey(day);
+    if (col.dataset.date === todayKey) col.classList.add('today');
+
+    const layer = document.createElement('div');
+    layer.className = 'events-layer';
+    col.appendChild(layer);
+
+    const items = eventsForDay(day);
+    layoutOverlaps(items);
+    for (const it of items) layer.appendChild(buildEventEl(it));
+    return col;
+  }
+
+  /** Events overlapping `day`, as minute ranges within that day. */
+  function eventsForDay(day) {
+    const dayEnd = addDays(day, 1);
+    const items = [];
+    for (const ev of store.events.values()) {
+      const s = new Date(ev.start);
+      const e = new Date(ev.end);
+      if (!(s < dayEnd && e > day)) continue;
+      const sMin = minutesInDay(s, day);
+      const eMin = minutesInDay(e, day);
+      // Display range: at least one 15-min slot tall, never past 24:00.
+      const top = Math.min(sMin, DAY_MIN - SNAP);
+      items.push({ ev, sMin, eMin, top, bottom: Math.max(eMin, top + SNAP) });
+    }
+    return items;
+  }
+
+  /**
+   * Side-by-side layout for overlapping events.
+   * Events that (transitively) overlap form a cluster; inside a cluster each event
+   * takes the first free sub-column, and all share the cluster's column count.
+   */
+  function layoutOverlaps(items) {
+    items.sort((a, b) => a.top - b.top || b.bottom - a.bottom);
+    let cluster = [];
+    let colEnds = [];        // bottom of the last event in each sub-column
+    let clusterEnd = -1;
+    const flush = () => {
+      for (const it of cluster) it.cols = colEnds.length;
+      cluster = [];
+      colEnds = [];
+    };
+    for (const it of items) {
+      if (cluster.length && it.top >= clusterEnd) flush();
+      let c = colEnds.findIndex((end) => end <= it.top);
+      if (c === -1) { c = colEnds.length; colEnds.push(it.bottom); } else colEnds[c] = it.bottom;
+      it.col = c;
+      cluster.push(it);
+      clusterEnd = Math.max(clusterEnd, it.bottom);
+    }
+    flush();
+  }
+
+  function buildEventEl(it) {
+    const el = document.createElement('div');
+    el.className = 'event';
+    el.dataset.id = it.ev.id;
+    const w = 100 / it.cols;
+    el.style.left = `${it.col * w}%`;
+    el.style.width = it.cols > 1 ? `calc(${w}% - 2px)` : '100%';
+    placeBlock(el, it.top, it.bottom);
+    el.classList.toggle('short', it.bottom - it.top < 30);
+
+    const text = document.createElement('div');
+    text.className = 'ev-text';
+    const title = document.createElement('span');
+    title.className = 'ev-title';
+    const time = document.createElement('span');
+    time.className = 'ev-time';
+    text.append(title, time);
+
+    const handle = document.createElement('div');
+    handle.className = 'ev-resize';
+    el.append(text, handle);
+
+    setEventText(el, it.ev.title, it.sMin, it.eMin);
+    return el;
+  }
+
+  /** Position a block (event, ghost, selection) by minutes. Uses --hour-h so CSS can change the scale. */
+  function placeBlock(el, startMin, endMin) {
+    el.style.top = `calc(var(--hour-h) * ${startMin / 60})`;
+    el.style.height = `calc(var(--hour-h) * ${(endMin - startMin) / 60} - 1px)`;
+  }
+
+  function setEventText(el, title, startMin, endMin) {
+    el.querySelector('.ev-title').textContent = title;
+    el.querySelector('.ev-time').textContent = ` — ${fmtRange(startMin, endMin)}`;
+    el.title = `${title} — ${fmtRange(startMin, endMin)}`;
+  }
+
+  /** Thin line at the current time, in today's column (if today is on screen). */
+  function updateNowLine() {
+    const old = els.columns.querySelector('.now-line');
+    if (old) old.remove();
+    const now = new Date();
+    const col = els.columns.querySelector(`.day-col[data-date="${dateKey(now)}"]`);
+    if (!col) return;
+    const line = document.createElement('div');
+    line.className = 'now-line';
+    line.style.top = `calc(var(--hour-h) * ${(now.getHours() * 60 + now.getMinutes()) / 60})`;
+    col.appendChild(line);
+  }
+
+  /** Scroll so the current time sits about a third of the way down the grid. */
+  function scrollToNow() {
+    const now = new Date();
+    const colRect = els.columns.getBoundingClientRect();
+    const scRect = els.scroller.getBoundingClientRect();
+    const headerH = els.headers.offsetHeight;
+    const colTop = colRect.top - scRect.top + els.scroller.scrollTop;
+    const y = ((now.getHours() * 60 + now.getMinutes()) / DAY_MIN) * colRect.height;
+    const visible = els.scroller.clientHeight - headerH;
+    els.scroller.scrollTop = Math.max(0, colTop + y - headerH - visible / 3);
+  }
+
+  /* =======================================================================
+     Pointer interaction (mouse + touch share one code path)
+
+     Desktop (mouse/pen): press and drag immediately.
+     Touch: a normal swipe scrolls natively; holding still for LONG_PRESS_MS
+     "activates" the gesture, after which moving the finger drags instead of
+     scrolling. A quick tap = click.
+
+     gesture.kind:
+       'create' — drawing a new time range on an empty slot
+       'move'   — dragging an existing event (can change day)
+       'resize' — dragging an event's bottom edge
+     ======================================================================= */
+  let lastScrollAt = 0;
+  let autoScrollRaf = 0;
+
+  /** Minutes from midnight under clientY in a column (unsnapped, clamped). */
+  function pointerMinutes(col, clientY) {
+    const r = col.getBoundingClientRect();
+    return clamp(((clientY - r.top) / r.height) * DAY_MIN, 0, DAY_MIN);
+  }
+
+  /** The day column under clientX (nearest one if outside). */
+  function columnAtX(clientX) {
+    const cols = els.columns.children;
+    for (const col of cols) {
+      if (clientX < col.getBoundingClientRect().right) return col;
+    }
+    return cols[cols.length - 1];
+  }
+
+  function onPointerDown(e) {
+    if (gesture || !e.isPrimary) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const col = e.target.closest('.day-col');
+    if (!col) return; // header / time labels
+
+    const isTouch = e.pointerType === 'touch';
+    const g = {
+      pointerId: e.pointerId,
+      isTouch,
+      startX: e.clientX, startY: e.clientY,
+      x: e.clientX, y: e.clientY,
+      active: !isTouch,      // touch waits for the long-press
+      dragging: false,
+      col,
+      day: dateFromKey(col.dataset.date),
+      timer: 0,
+      // A tap that only stops momentum scrolling on iOS shouldn't create an event.
+      afterScroll: isTouch && performance.now() - lastScrollAt < 150,
+    };
+
+    const evEl = e.target.closest('.event');
+    if (evEl) {
+      const ev = store.events.get(evEl.dataset.id);
+      if (!ev) return;
+      const s = new Date(ev.start);
+      g.kind = e.target.closest('.ev-resize') ? 'resize' : 'move';
+      g.ev = ev;
+      g.el = evEl;
+      g.durationMs = new Date(ev.end) - s;
+      g.durationMin = Math.max(SNAP, Math.round(g.durationMs / 60000));
+      // Start relative to this column's midnight (negative if it began on an earlier day).
+      g.startMin = sameDay(s, g.day) ? s.getHours() * 60 + s.getMinutes() : Math.round((s - g.day) / 60000);
+      g.grabOffset = pointerMinutes(col, e.clientY) - g.startMin;
+    } else {
+      g.kind = 'create';
+      g.anchorSlot = Math.min(snapFloor(pointerMinutes(col, e.clientY)), DAY_MIN - SNAP);
+      g.extended = false;  // becomes true once the pointer leaves the first slot
+    }
+
+    gesture = g;
+    if (isTouch) {
+      g.timer = setTimeout(activateLongPress, LONG_PRESS_MS);
+    } else {
+      e.preventDefault(); // no text selection while dragging
+      try { els.scroller.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+    }
+  }
+
+  function activateLongPress() {
+    const g = gesture;
+    if (!g || !g.isTouch) return;
+    g.active = true;
+    startDragging(g);
+  }
+
+  function onPointerMove(e) {
+    const g = gesture;
+    if (!g || e.pointerId !== g.pointerId) return;
+    g.x = e.clientX;
+    g.y = e.clientY;
+    const dist = Math.hypot(e.clientX - g.startX, e.clientY - g.startY);
+
+    if (!g.active) {
+      // Touch still waiting for the long-press: moving means the user is scrolling.
+      if (dist > TOUCH_SLOP) cancelGesture();
+      return;
+    }
+    if (!g.dragging) {
+      if (dist < MOUSE_DRAG_THRESHOLD) return;
+      startDragging(g);
+      return;
+    }
+    updateDrag(g);
+    autoScroll();
+  }
+
+  function startDragging(g) {
+    g.dragging = true;
+    document.body.classList.add(`drag-${g.kind}`);
+    if (g.kind === 'move') g.el.classList.add('drag-source');
+    if (g.kind === 'resize') g.el.classList.add('resizing');
+    updateDrag(g);
+  }
+
+  /** Update the live preview (selection box / ghost / resized event) from the last pointer position. */
+  function updateDrag(g) {
+    if (g.kind === 'create') {
+      const slot = Math.min(snapFloor(pointerMinutes(g.col, g.y)), DAY_MIN - SNAP);
+      if (slot !== g.anchorSlot) g.extended = true;
+      g.curSlot = slot;
+      const [s, e] = selectionRange(g);
+      g.selEl = drawSelection(g.col, s, e, g.selEl);
+    } else if (g.kind === 'move') {
+      const col = columnAtX(g.x);
+      const dur = Math.min(g.durationMin, DAY_MIN);
+      const start = clamp(snapRound(pointerMinutes(col, g.y) - g.grabOffset), 0, DAY_MIN - dur);
+      g.target = { day: dateFromKey(col.dataset.date), start };
+      drawGhost(g, col, start, start + dur);
+    } else if (g.kind === 'resize') {
+      const minEnd = Math.max(g.startMin, 0) + SNAP;
+      g.newEnd = clamp(snapRound(pointerMinutes(g.col, g.y)), minEnd, DAY_MIN);
+      const top = Math.max(g.startMin, 0);
+      placeBlock(g.el, top, g.newEnd);
+      g.el.classList.toggle('short', g.newEnd - top < 30);
+      setEventText(g.el, g.ev.title, top, g.newEnd);
+    }
+  }
+
+  /** Selection from the anchor slot to the current slot (either direction), 15-min granularity. */
+  function selectionRange(g) {
+    const a = g.anchorSlot;
+    const c = g.curSlot;
+    return [Math.min(a, c), Math.max(a, c) + SNAP];
+  }
+
+  function drawSelection(col, startMin, endMin, el) {
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'selection';
+      col.appendChild(el);
+    }
+    placeBlock(el, startMin, endMin);
+    el.textContent = fmtRange(startMin, endMin);
+    return el;
+  }
+
+  function drawGhost(g, col, startMin, endMin) {
+    if (!g.ghost) {
+      g.ghost = g.el.cloneNode(true);
+      g.ghost.classList.remove('editing', 'drag-source');
+      g.ghost.classList.add('ghost');
+      g.ghost.style.left = '0';
+      g.ghost.style.width = '100%';
+    }
+    const layer = col.querySelector('.events-layer');
+    if (g.ghost.parentNode !== layer) layer.appendChild(g.ghost);
+    placeBlock(g.ghost, startMin, endMin);
+    g.ghost.classList.toggle('short', endMin - startMin < 30);
+    setEventText(g.ghost, g.ev.title, startMin, endMin);
+  }
+
+  function onPointerUp(e) {
+    const g = gesture;
+    if (!g || e.pointerId !== g.pointerId) return;
+
+    if (!g.dragging) {
+      // A click (mouse) or a quick tap (touch).
+      endGesture(g, false);
+      if (!g.afterScroll) {
+        if (g.kind === 'create') {
+          openCreatePopover(g.col, g.day, g.anchorSlot, Math.min(g.anchorSlot + DEFAULT_DURATION, DAY_MIN), null);
+        } else {
+          openEditPopover(g.ev, g.el);
+        }
+      }
+    } else if (g.kind === 'create') {
+      // No real drag (stayed in the first slot) → default 1 hour.
+      const [s, en] = g.extended ? selectionRange(g) : [g.anchorSlot, Math.min(g.anchorSlot + DEFAULT_DURATION, DAY_MIN)];
+      endGesture(g, true);
+      openCreatePopover(g.col, g.day, s, en, g.selEl);
+    } else if (g.kind === 'move') {
+      endGesture(g, false);
+      if (!(g.target && moveEvent(g.ev, g.target.day, g.target.start, g.durationMs))) render();
+    } else if (g.kind === 'resize') {
+      endGesture(g, false);
+      if (!(g.newEnd != null && resizeEvent(g.ev, g.day, g.newEnd))) render(); // restore the element
+    }
+
+    if (renderPending) requestRender();
+  }
+
+  /** Abort whatever is in progress (pointercancel, Esc, window blur, scroll start). */
+  function cancelGesture() {
+    const g = gesture;
+    if (!g) return;
+    endGesture(g, false);
+    if (g.dragging || renderPending) requestRender();
+  }
+
+  /** Clean up gesture visuals. keepSelection: leave the selection box for the popover. */
+  function endGesture(g, keepSelection) {
+    clearTimeout(g.timer);
+    cancelAnimationFrame(autoScrollRaf);
+    autoScrollRaf = 0;
+    document.body.classList.remove('drag-create', 'drag-move', 'drag-resize');
+    if (g.ghost) g.ghost.remove();
+    if (g.el) g.el.classList.remove('drag-source', 'resizing');
+    if (g.selEl && !keepSelection) g.selEl.remove();
+    if (els.scroller.hasPointerCapture && els.scroller.hasPointerCapture(g.pointerId)) {
+      els.scroller.releasePointerCapture(g.pointerId);
+    }
+    gesture = null;
+  }
+
+  /** While dragging near the top/bottom edge, scroll the grid (you can't swipe-scroll mid-drag). */
+  function autoScroll() {
+    if (!autoScrollRaf) autoScrollRaf = requestAnimationFrame(autoScrollStep);
+  }
+  function autoScrollStep() {
+    autoScrollRaf = 0;
+    const g = gesture;
+    if (!g || !g.dragging) return;
+    const r = els.scroller.getBoundingClientRect();
+    const top = r.top + els.headers.offsetHeight;
+    let dy = 0;
+    if (g.y < top + AUTOSCROLL_EDGE) dy = -(top + AUTOSCROLL_EDGE - g.y);
+    else if (g.y > r.bottom - AUTOSCROLL_EDGE) dy = g.y - (r.bottom - AUTOSCROLL_EDGE);
+    if (!dy) return;
+    const before = els.scroller.scrollTop;
+    els.scroller.scrollTop += clamp(Math.round(dy / 3), -18, 18);
+    if (els.scroller.scrollTop !== before) {
+      updateDrag(g);
+      autoScrollRaf = requestAnimationFrame(autoScrollStep);
+    }
+  }
+
+  els.scroller.addEventListener('pointerdown', onPointerDown);
+  els.scroller.addEventListener('pointermove', onPointerMove);
+  els.scroller.addEventListener('pointerup', onPointerUp);
+  els.scroller.addEventListener('pointercancel', cancelGesture); // e.g. the browser took over to scroll
+  window.addEventListener('blur', cancelGesture);
+  els.scroller.addEventListener('scroll', () => { lastScrollAt = performance.now(); }, { passive: true });
+
+  // Once a long-press is active, stop the browser from scrolling so the finger drags instead.
+  els.scroller.addEventListener('touchmove', (e) => {
+    if (gesture && gesture.isTouch && gesture.active) e.preventDefault();
+  }, { passive: false });
+  // Swallow the "ghost" mouse click that iOS fires after a tap on the grid
+  // (we already handled the tap via pointer events).
+  els.scroller.addEventListener('touchend', (e) => {
+    if (e.cancelable && e.target.closest && e.target.closest('.day-col')) e.preventDefault();
+  }, { passive: false });
+  // No context menu / "save image" sheet on long-press.
+  els.scroller.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.day-col')) e.preventDefault();
+  });
+
+  /* =======================================================================
+     Popover (create / rename / delete)
+     ======================================================================= */
+  const popup = { open: false, mode: null, openedAt: 0 };
+
+  function openCreatePopover(col, day, startMin, endMin, selEl) {
+    selEl = drawSelection(col, startMin, endMin, selEl);
+    Object.assign(popup, { mode: 'create', day, startMin, endMin, selEl, ev: null, el: null });
+    els.popWhen.textContent = `${dayLabel(day)} · ${fmtRange(startMin, endMin)}`;
+    els.popInput.value = '';
+    els.popDelete.hidden = true;
+    showPopover(selEl.getBoundingClientRect());
+  }
+
+  function openEditPopover(ev, el) {
+    const s = new Date(ev.start);
+    const e = new Date(ev.end);
+    const day = startOfDay(s);
+    const multiDay = e > addDays(day, 1);
+    els.popWhen.textContent = multiDay
+      ? `${dayLabel(s)} ${fmtMin(minutesInDay(s, day))} → ${dayLabel(e)} ${fmtMin(minutesInDay(e, startOfDay(e)))}`
+      : `${dayLabel(s)} · ${fmtRange(minutesInDay(s, day), minutesInDay(e, day))}`;
+    Object.assign(popup, { mode: 'edit', ev, el, selEl: null });
+    el.classList.add('editing');
+    els.popInput.value = ev.title;
+    els.popDelete.hidden = false;
+    showPopover(el.getBoundingClientRect());
+    els.popInput.select();
+  }
+
+  function showPopover(anchorRect) {
+    popup.open = true;
+    popup.openedAt = performance.now();
+    els.popInput.classList.remove('invalid');
+    els.backdrop.hidden = false;
+    els.popover.hidden = false;
+    positionPopover(anchorRect);
+    // Focus synchronously (inside the tap/click handler) so iOS shows the keyboard.
+    els.popInput.focus({ preventScroll: true });
+  }
+
+  /** Desktop: next to the selection/event, kept inside the window. Mobile: CSS pins it to the top. */
+  function positionPopover(rect) {
+    const p = els.popover;
+    if (state.mobile) {
+      p.style.left = p.style.top = '';
+      return;
+    }
+    const m = 8;
+    const pw = p.offsetWidth;
+    const ph = p.offsetHeight;
+    let left = rect.right + 10;
+    if (left + pw > window.innerWidth - m) left = rect.left - pw - 10;
+    left = clamp(left, m, window.innerWidth - pw - m);
+    const top = clamp(rect.top, m, window.innerHeight - ph - m);
+    p.style.left = `${left}px`;
+    p.style.top = `${top}px`;
+  }
+
+  function closePopover() {
+    if (!popup.open) return;
+    popup.open = false;
+    els.popover.hidden = true;
+    els.backdrop.hidden = true;
+    if (popup.selEl) popup.selEl.remove();
+    if (popup.el) popup.el.classList.remove('editing');
+    popup.selEl = popup.el = popup.ev = null;
+    els.popInput.blur();
+    if (renderPending) requestRender();
+  }
+
+  function savePopover() {
+    const title = els.popInput.value.trim();
+    if (!title) {
+      els.popInput.classList.add('invalid');
+      els.popInput.focus();
+      return;
+    }
+    if (popup.mode === 'create') {
+      const { day, startMin, endMin } = popup;
+      closePopover();
+      createEvent(title, atMinutes(day, startMin), atMinutes(day, endMin));
+    } else {
+      const ev = popup.ev;
+      closePopover();
+      if (title !== ev.title) renameEvent(ev, title);
+    }
+  }
+
+  function deleteFromPopover() {
+    const ev = popup.ev;
+    closePopover();
+    if (ev) deleteEvent(ev);
+  }
+
+  // Ignore button presses in the first moments after opening (protects against a stray ghost click).
+  const guarded = (fn) => () => { if (performance.now() - popup.openedAt > 300) fn(); };
+  els.popSave.addEventListener('click', guarded(savePopover));
+  els.popCancel.addEventListener('click', guarded(closePopover));
+  els.popDelete.addEventListener('click', guarded(deleteFromPopover));
+  els.backdrop.addEventListener('pointerdown', (e) => { e.preventDefault(); closePopover(); });
+  els.popInput.addEventListener('input', () => els.popInput.classList.remove('invalid'));
+  els.popInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); savePopover(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (popup.open) { e.preventDefault(); closePopover(); } else cancelGesture();
+  });
+
+  /* =======================================================================
+     Server API + optimistic updates
+     ======================================================================= */
+  let online = true;
+
+  function setOnline(value) {
+    if (online === value) return;
+    online = value;
+    els.offline.hidden = value;
+    scheduleSync(value ? SYNC_INTERVAL : OFFLINE_RETRY);
+  }
+
+  /** fetch() wrapper: JSON in/out, timeout, and online/offline tracking. */
+  async function request(method, url, body, extraHeaders) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT);
+    let res;
+    try {
+      res = await fetch(url, {
+        method,
+        cache: 'no-store',
+        signal: ctrl.signal,
+        headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(extraHeaders || {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (_) {
+      setOnline(false);
+      const err = new Error("can't reach server");
+      err.network = true;
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    setOnline(true);
+    let data = null;
+    if (res.status !== 204) {
+      try { data = await res.json(); } catch (_) { /* empty / not JSON */ }
+    }
+    if (!res.ok) {
+      const err = new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  /* -----------------------------------------------------------------------
+     Storage backends. Both offer the same four operations and return
+     events shaped like { id, title, start, end, updatedAt } (ISO strings).
+     ----------------------------------------------------------------------- */
+
+  /** The local Node server (server.js → data/events.json). */
+  const localBackend = {
+    name: 'local server',
+    // start/end: Dates, end exclusive. The server takes inclusive local dates.
+    list: (start, end) => request('GET', `/api/events?from=${dateKey(start)}&to=${dateKey(addDays(end, -1))}`),
+    create: (ev) => request('POST', '/api/events', ev),
+    update: (id, patch) => request('PUT', `/api/events/${encodeURIComponent(id)}`, patch),
+    remove: (id) => request('DELETE', `/api/events/${encodeURIComponent(id)}`),
+  };
+
+  /** Supabase (hosted Postgres) through its REST API — table "events", see supabase/setup.sql. */
+  function supabaseBackend({ supabaseUrl, supabaseKey }) {
+    const base = `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/events`;
+    const auth = { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` };
+    const writeHeaders = { ...auth, Prefer: 'return=representation' };
+    const enc = encodeURIComponent;
+    const iso = (v) => new Date(v).toISOString();
+    const toEvent = (r) => ({ id: r.id, title: r.title, start: iso(r.start_at), end: iso(r.end_at), updatedAt: iso(r.updated_at) });
+    const toRow = (p) => {
+      const row = { updated_at: new Date().toISOString() };
+      if (p.title !== undefined) row.title = p.title;
+      if (p.start !== undefined) row.start_at = p.start;
+      if (p.end !== undefined) row.end_at = p.end;
+      return row;
+    };
+    return {
+      name: 'Supabase',
+      async list(start, end) {
+        const rows = await request('GET',
+          `${base}?select=*&start_at=lt.${enc(end.toISOString())}&end_at=gt.${enc(start.toISOString())}&order=start_at.asc`,
+          null, auth);
+        return (rows || []).map(toEvent);
+      },
+      async create(ev) {
+        const rows = await request('POST', base, { id: ev.id, ...toRow(ev) }, writeHeaders);
+        return toEvent(rows[0]);
+      },
+      async update(id, patch) {
+        const rows = await request('PATCH', `${base}?id=eq.${enc(id)}`, toRow(patch), writeHeaders);
+        if (!rows || !rows.length) {
+          const err = new Error('Event not found');
+          err.status = 404;
+          throw err;
+        }
+        return toEvent(rows[0]);
+      },
+      async remove(id) {
+        await request('DELETE', `${base}?id=eq.${enc(id)}`, null, auth);
+        return null;
+      },
+    };
+  }
+
+  const CONFIG = window.PLANNER_CONFIG || {};
+  const backend = CONFIG.supabaseUrl && CONFIG.supabaseKey ? supabaseBackend(CONFIG) : localBackend;
+
+  /**
+   * Optimistic change: update the screen right away, send the request,
+   * and put things back (with a toast) if the server says no.
+   *   after: the new event, or null for a delete
+   */
+  function mutate(id, after, send, what) {
+    const before = store.events.get(id) || null;
+    const seq = (store.opSeq.get(id) || 0) + 1;
+    store.opSeq.set(id, seq);
+    store.mutationSeq++;
+    store.inflight++;
+
+    if (after) store.events.set(id, after); else store.events.delete(id);
+    requestRender();
+
+    send()
+      .then((saved) => {
+        // Adopt the server's copy (e.g. its updatedAt) unless a newer local change exists.
+        if (saved && saved.id && store.opSeq.get(id) === seq) {
+          store.events.set(id, saved);
+          requestRender();
+        }
+      })
+      .catch((err) => {
+        if (err.status === 404 && after) {
+          store.events.delete(id);
+          requestRender();
+          toast('That event was deleted on another device.', true);
+          return;
+        }
+        if (store.opSeq.get(id) === seq) {
+          if (before) store.events.set(id, before); else store.events.delete(id);
+          requestRender();
+        } else {
+          syncAgain = true; // a newer change is in flight; let a fresh sync sort it out
+        }
+        toast(err.network
+          ? `Couldn't ${what} — can't reach server. Change undone.`
+          : `Couldn't ${what} (${err.message}). Change undone.`, true);
+      })
+      .finally(() => {
+        store.inflight--;
+        if (store.inflight === 0 && syncAgain) sync();
+      });
+  }
+
+  function createEvent(title, start, end) {
+    const ev = { id: uuid(), title, start: start.toISOString(), end: end.toISOString(), updatedAt: new Date().toISOString() };
+    mutate(ev.id, ev, () => backend.create(ev), 'save the event');
+  }
+
+  function renameEvent(ev, title) {
+    const after = { ...ev, title, updatedAt: new Date().toISOString() };
+    mutate(ev.id, after, () => backend.update(ev.id, { title }), 'rename the event');
+  }
+
+  /** Returns false if nothing changed. */
+  function moveEvent(ev, day, startMin, durationMs) {
+    const start = atMinutes(day, startMin);
+    const end = new Date(start.getTime() + durationMs);
+    if (start.toISOString() === new Date(ev.start).toISOString()) return false;
+    const after = { ...ev, start: start.toISOString(), end: end.toISOString(), updatedAt: new Date().toISOString() };
+    mutate(ev.id, after, () => backend.update(ev.id, { start: after.start, end: after.end }), 'move the event');
+    return true;
+  }
+
+  /** Returns false if nothing changed. */
+  function resizeEvent(ev, day, endMin) {
+    const end = atMinutes(day, endMin).toISOString();
+    if (end === new Date(ev.end).toISOString()) return false;
+    const after = { ...ev, end, updatedAt: new Date().toISOString() };
+    mutate(ev.id, after, () => backend.update(ev.id, { end }), 'resize the event');
+    return true;
+  }
+
+  function deleteEvent(ev) {
+    mutate(ev.id, null, () => backend.remove(ev.id), 'delete the event');
+  }
+
+  /* =======================================================================
+     Sync: fetch the visible days on load, on navigation, when the page
+     becomes visible again, and every 30 s.
+     ======================================================================= */
+  let syncTimer = 0;
+  let syncing = false;
+  let syncAgain = false;
+
+  function scheduleSync(delay) {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      if (document.visibilityState === 'visible') sync();
+      else scheduleSync(delay); // check again later; visibilitychange also triggers a sync
+    }, delay);
+  }
+
+  /** Stable fingerprint of the local events, to skip re-rendering when nothing changed. */
+  function signature() {
+    return [...store.events.values()]
+      .map((e) => `${e.id}|${e.title}|${e.start}|${e.end}|${e.updatedAt}`)
+      .sort()
+      .join('\n');
+  }
+
+  async function sync() {
+    // Don't overwrite optimistic changes that the server hasn't confirmed yet.
+    if (syncing || store.inflight > 0) { syncAgain = true; return; }
+    syncing = true;
+    syncAgain = false;
+
+    const days = visibleDays();
+    const first = days[0];
+    const last = days[days.length - 1];
+    const seq = store.mutationSeq;
+
+    try {
+      // One extra day on each side, in case the server's time zone differs from this device's.
+      const list = await backend.list(addDays(first, -1), addDays(last, 2));
+      if (seq !== store.mutationSeq || store.inflight > 0) {
+        syncAgain = true; // a local change happened meanwhile; this result may be stale
+      } else if (Array.isArray(list)) {
+        const before = signature();
+        replaceRange(list, first, addDays(last, 1));
+        if (signature() !== before) requestRender();
+      }
+    } catch (err) {
+      if (!err.network) toast(`Couldn't load events (${err.message}).`, true);
+    } finally {
+      syncing = false;
+      scheduleSync(online ? SYNC_INTERVAL : OFFLINE_RETRY);
+      if (syncAgain && store.inflight === 0) sync();
+    }
+  }
+
+  /** Replace cached events overlapping [rangeStart, rangeEnd) with the server's list. */
+  function replaceRange(list, rangeStart, rangeEnd) {
+    for (const [id, ev] of store.events) {
+      if (new Date(ev.start) < rangeEnd && new Date(ev.end) > rangeStart) store.events.delete(id);
+    }
+    for (const ev of list) {
+      if (ev && ev.id) store.events.set(ev.id, ev);
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      tickClock();
+      sync();
+    }
+  });
+  window.addEventListener('online', () => sync());
+  window.addEventListener('pageshow', (e) => { if (e.persisted) sync(); }); // back/forward cache
+
+  /* =======================================================================
+     Toast
+     ======================================================================= */
+  let toastTimer = 0;
+  function toast(message, isError) {
+    els.toast.textContent = message;
+    els.toast.className = 'toast show' + (isError ? ' error' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { els.toast.className = 'toast' + (isError ? ' error' : ''); }, 4000);
+  }
+
+  /* =======================================================================
+     Navigation, view toggle, responsive mode, clock
+     ======================================================================= */
+  function navigate(change) {
+    change();
+    closePopover();
+    render();
+    sync();
+  }
+
+  els.today.addEventListener('click', () => navigate(() => { state.anchor = todayStart(); }));
+  els.prev.addEventListener('click', () => navigate(() => { state.anchor = addDays(state.anchor, -VIEW_STEP[state.view]); }));
+  els.next.addEventListener('click', () => navigate(() => { state.anchor = addDays(state.anchor, VIEW_STEP[state.view]); }));
+  els.viewToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-view]');
+    if (!btn) return;
+    navigate(() => {
+      state.view = btn.dataset.view;
+      state.anchor = todayStart(); // "Day" and "3 Days" start from today; "Week" = this week
+      savePref('planner.view', state.view);
+    });
+  });
+
+  /** Switch between desktop and phone layouts. */
+  function applyResponsive() {
+    const mobile = mobileQuery.matches;
+    const changed = mobile !== state.mobile;
+    state.mobile = mobile;
+    document.body.classList.toggle('is-mobile', mobile);
+    return changed;
+  }
+  const onMediaChange = () => {
+    if (!applyResponsive()) return;
+    cancelGesture();
+    closePopover();
+    render();
+    scrollToNow();
+    sync();
+  };
+  if (mobileQuery.addEventListener) mobileQuery.addEventListener('change', onMediaChange);
+  else mobileQuery.addListener(onMediaChange); // older Safari
+
+  // Move the now-line, and roll "today" over at midnight.
+  let lastTodayKey = dateKey(new Date());
+  function tickClock() {
+    const key = dateKey(new Date());
+    if (key !== lastTodayKey) {
+      if (dateKey(state.anchor) === lastTodayKey) state.anchor = todayStart();
+      lastTodayKey = key;
+      requestRender();
+      sync();
+    } else {
+      updateNowLine();
+    }
+  }
+
+  /* =======================================================================
+     Start
+     ======================================================================= */
+  applyResponsive();
+  buildGutter();
+  render();
+  scrollToNow();
+  sync();
+  setInterval(tickClock, 30000);
+})();
+</script>
+</body>
+</html>

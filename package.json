@@ -1,0 +1,15 @@
+{
+  "name": "day-planner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simple day planner that syncs your PC and iPhone: local Node server or free GitHub Pages + Supabase.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "import": "node scripts/import-to-supabase.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
