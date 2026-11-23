@@ -12,6 +12,6 @@
  * NEVER put the "secret" / "service_role" key here.
  */
 window.PLANNER_CONFIG = {
-  supabaseUrl: '',
-  supabaseKey: '',
+  supabaseUrl: 'https://xjcemqvvarzfaunxxkwh.supabase.co',
+  supabaseKey: 'sb_publishable_6ALsK-yT4xRGAKg5vwdgJA__j9_VFlj',
 };
